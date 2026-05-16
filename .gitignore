@@ -1,0 +1,22 @@
+# --- FRONTEND (React) ---
+# Ignorar los node_modules en cualquier subcarpeta
+**/node_modules/
+parse-frontend/build/
+parse-frontend/dist/
+
+
+# --- BACKEND (FastAPI / Python) ---
+# Ignorar entornos virtuales (si usas venv, .venv, env, etc.)
+**/venv/
+**/.venv/
+**/env/
+**/ENV/
+
+# Ignorar archivos de caché de Python
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+
+# Ignorar archivos de variables de entorno (credenciales secretas)
+**/.env
