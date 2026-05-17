@@ -4,10 +4,10 @@ import styles from './Panels.module.css'
 const NODE_R   = 16
 const H_GAP    = 40  // Espacio mínimo libre garantizado entre burbujas vecinas
 const V_GAP    = 60  // Distancia vertical fija entre niveles
-const TERMINALS = new Set(['+', '-', '*', '/', '(', ')', 'id', '$', 'ϵ', 'λ'])
+const TERMINALS = new Set(['+', '-', '*', '/', '(', ')', 'id', '$', 'ϵ', 'λ', '✗'])
 
 function isTerminal(label) {
-  return TERMINALS.has(label) || /^[a-z$ϵλ]$/.test(label)
+  return TERMINALS.has(label) || /^[a-z$ϵλ✗]$/.test(label)
 }
 
 /**
@@ -15,67 +15,53 @@ function isTerminal(label) {
  * Soluciona colisiones en cualquier nivel de profundidad calculando contornos dinámicos.
  */
 function perfectTreeLayout(root) {
-  // Inicialización de propiedades del layout
   function setup(node, depth = 0) {
     if (!node) return;
     node._y = depth * V_GAP + NODE_R + 25;
     node._x = 0;
-    node._mod = 0; // Modificador para empujar subárboles de manera hereditaria
+    node._mod = 0; 
     node.children?.forEach(c => setup(c, depth + 1));
   }
 
-  // Primera fase (Bottom-Up): Calcula X relativas y resuelve colisiones de contornos
   function firstWalk(node, depth = 0) {
     if (!node.children || node.children.length === 0) {
-      // Si el nodo es una hoja, su posición inicial es 0 de manera local
       node._x = 0;
       return;
     }
 
-    // Procesar recursivamente toda la descendencia
     node.children.forEach(c => firstWalk(c, depth + 1));
 
-    // Desplazar los hijos para que no se encimen entre sí localmente
     let currentLeftX = 0;
     node.children.forEach((child, i) => {
       if (i > 0) {
-        // Dejamos un espacio base basado en el radio de los nodos y el gap horizontal
         currentLeftX += NODE_R * 2 + H_GAP;
       }
       child._x = currentLeftX;
     });
 
-    // Resolver colisiones reales inspeccionando los niveles inferiores de subárboles hermanos
     for (let i = 0; i < node.children.length - 1; i++) {
       const leftChild = node.children[i];
-      
       for (let j = i + 1; j < node.children.length; j++) {
         const rightChild = node.children[j];
-        
-        // Buscamos cuál es el solapamiento máximo en cualquier nivel de profundidad inferior
         const overlap = calculateMaxOverlap(leftChild, rightChild);
         if (overlap > 0) {
-          // Empujamos el hijo derecho lo necesario para romper el choque
           rightChild._x += overlap;
           rightChild._mod += overlap;
         }
       }
     }
 
-    // Centrar al padre perfectamente arriba de sus hijos ya reacomodados
     const firstChildX = node.children[0]._x;
     const lastChildX = node.children[node.children.length - 1]._x;
     node._x = (firstChildX + lastChildX) / 2;
   }
 
-  // Segunda fase (Top-Down): Aplica y hereda los modificadores acumulados
   function secondWalk(node, accumulatedMod = 0) {
     if (!node) return;
     node._x += accumulatedMod;
     node.children?.forEach(c => secondWalk(c, accumulatedMod + node._mod));
   }
 
-  // Función auxiliar para escanear y encontrar colisiones en niveles inferiores
   function calculateMaxOverlap(leftSubTree, rightSubTree) {
     const leftContour = {};
     const rightContour = {};
@@ -94,7 +80,6 @@ function perfectTreeLayout(root) {
     getLeftContour(rightSubTree, 0, 0);
 
     let maxOverlap = 0;
-    // Comparamos los niveles comunes para ver si las ramas chocan abajo
     Object.keys(leftContour).forEach(d => {
       if (rightContour[d] !== undefined) {
         const dist = leftContour[d] - rightContour[d];
@@ -116,7 +101,6 @@ function perfectTreeLayout(root) {
   secondWalk(root, 0);
 }
 
-// Recolecta los nodos en una lista plana guardando la referencia del padre para el SVG
 function collectNodesWithParent(node, parent = null, acc = []) {
   if (!node) return acc;
   node._parent = parent; 
@@ -126,32 +110,65 @@ function collectNodesWithParent(node, parent = null, acc = []) {
 }
 
 export default function TreePanel({ result }) {
-  const treeData = result?.tree || result?.root_tree;
+  if (result) {
+    window.__last_result = result;
+  }
+
+  const treeData = result?.tree || 
+                   result?.root_tree || 
+                   result?.table?.tree || 
+                   result?.table?.root_tree ||
+                   window.__last_result?.tree || 
+                   window.__last_result?.root_tree ||
+                   window.__last_result?.table?.tree;
+  
+  const errorCell = result?.error_cell || 
+                    result?.table?.error_cell || 
+                    window.__last_result?.error_cell ||
+                    window.__last_result?.table?.error_cell;
 
   if (!treeData) return <div className={styles.placeholder}>Ejecuta el análisis para ver el árbol.</div>
 
   const { nodes, edges, width, height } = useMemo(() => {
     const tree = JSON.parse(JSON.stringify(treeData))
     
-    // Invocamos el maquetador de contornos dinámicos
     perfectTreeLayout(tree)
 
     const flatNodes = collectNodesWithParent(tree, null, [])
     
-    // Normalización: Asegurar que ningún nodo quede fuera del canvas por la izquierda
     const minX = Math.min(...flatNodes.map(n => n._x))
     const offset = minX < NODE_R + 25 ? (NODE_R + 25) - minX : 25;
     flatNodes.forEach(n => n._x += offset);
 
-    // Generación limpia de aristas directo de la lista plana normalizada
+    // 1. Identificamos los NODOS reales que tienen error de forma única e inequívoca
+    flatNodes.forEach(n => {
+      const term = isTerminal(n.label)
+      
+      // 🌟 DETECTOR ROBUSTO: Se activa si es la marca literal '✗', el token del choque,
+      // o el No Terminal padre que contiene el colapso de Descenso Recursivo.
+      n.isActualErrorNode = n.label === '✗' || (errorCell && (
+        (term && n.label === errorCell.t) || 
+        (!term && n.label === errorCell.nt && (
+          !n.children || 
+          n.children.length === 0 || 
+          n.children.some(c => c.label === '✗' || c.label === errorCell.t)
+        ))
+      ));
+    });
+
+    // 2. Generamos las aristas basándonos en la propiedad única del nodo hijo
     const flatEdges = [];
     flatNodes.forEach(n => {
       if (n._parent) {
+        // La arista se colorea si conecta hacia un nodo marcado como crítico de error
+        const isErrorEdge = n.isActualErrorNode;
+
         flatEdges.push({
           x1: n._parent._x,
           y1: n._parent._y,
           x2: n._x,
-          y2: n._y
+          y2: n._y,
+          isError: isErrorEdge
         });
       }
     });
@@ -165,11 +182,11 @@ export default function TreePanel({ result }) {
       width: Math.max(maxX, 300), 
       height: maxY 
     }
-  }, [treeData])
+  }, [treeData, errorCell])
 
   return (
     <div className={`${styles.panel} animate-in`}>
-      <div className={styles.sectionTitle}>Árbol de derivación</div>
+      <div className={styles.sectionTitle}>Árbol de derivación parcial</div>
       <div className={styles.treeWrap} style={{ overflowX: 'auto', width: '100%' }}>
         <svg width={width} height={height} style={{ display: 'block', margin: '0 auto' }}>
           {/* Renderizado de Líneas */}
@@ -177,8 +194,9 @@ export default function TreePanel({ result }) {
             <line
               key={i}
               x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
-              stroke="rgba(124,108,255,0.45)"
-              strokeWidth={1.5}
+              stroke={e.isError ? "rgba(239, 68, 68, 0.6)" : "rgba(124,108,255,0.45)"}
+              strokeWidth={e.isError ? 2 : 1.5}
+              strokeDasharray={e.isError ? "4 2" : "none"}
             />
           ))}
           
@@ -186,22 +204,36 @@ export default function TreePanel({ result }) {
           {nodes.map((n, i) => {
             const term = isTerminal(n.label)
             const epsilon = n.label === 'ϵ' || n.label === 'λ'
-            const fill   = epsilon ? 'rgba(251,146,60,0.15)'
-                        : term   ? 'rgba(93,232,168,0.12)'
-                        :          'rgba(124,108,255,0.18)'
-            const stroke = epsilon ? '#fb923c'
-                         : term   ? 'var(--accent2)'
-                         :          'var(--accent)'
-            const textColor = epsilon ? '#fb923c'
-                            : term   ? 'var(--accent2)'
-                            :          '#c4b5fd'
+            
+            // 🌟 CONSUMO DE MEMORIA PRECALCULADA: Sincroniza la vista con el mapa del useMemo
+            const isErrorNode = n.isActualErrorNode;
+
+            let fill = epsilon ? 'rgba(251,146,60,0.15)'
+                     : term    ? 'rgba(93,232,168,0.12)'
+                     :           'rgba(124,108,255,0.18)';
+                     
+            let stroke = epsilon ? '#fb923c'
+                       : term    ? 'var(--accent2)'
+                       :           'var(--accent)';
+                       
+            let textColor = epsilon ? '#fb923c'
+                          : term    ? 'var(--accent2)'
+                          :           '#c4b5fd';
+
+            if (isErrorNode) {
+              fill = 'rgba(239, 68, 68, 0.25)';
+              stroke = '#ef4444';
+              textColor = '#f87171';
+            }
+
             return (
-              <g key={i}>
+              <g key={i} style={{ cursor: isErrorNode ? 'help' : 'default' }}>
+                <title>{isErrorNode ? `Punto crítico de error sintáctico: Choque con el símbolo '${n.label}'` : ''}</title>
                 <circle
                   cx={n._x} cy={n._y} r={NODE_R}
                   fill={fill}
                   stroke={stroke}
-                  strokeWidth={term ? 1 : 1.5}
+                  strokeWidth={isErrorNode ? 2.5 : (term ? 1 : 1.5)}
                 />
                 <text
                   x={n._x} y={n._y}
@@ -209,7 +241,7 @@ export default function TreePanel({ result }) {
                   dominantBaseline="central"
                   fontFamily="'JetBrains Mono', monospace"
                   fontSize={11}
-                  fontWeight={term ? 400 : 700}
+                  fontWeight={isErrorNode || !term ? 700 : 400}
                   fill={textColor}
                 >
                   {n.label}
@@ -223,6 +255,7 @@ export default function TreePanel({ result }) {
         <span style={{color:'#c4b5fd'}}>● No terminal</span>
         <span style={{color:'var(--accent2)'}}>● Terminal</span>
         <span style={{color:'#fb923c'}}>● ϵ / λ</span>
+        <span style={{color:'#ef4444', fontWeight: 'bold'}}>● Nodo con Error</span>
       </div>
     </div>
   )

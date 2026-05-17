@@ -146,14 +146,53 @@ class LRAnalyzer:
         return frozenset(closure_set)
 
     def _compute_first_of_sequence(self, sequence):
-        """Función auxiliar para calcular FIRST de una secuencia en tiempo de ejecución (Para LR1)"""
+        """Calcula el conjunto FIRST real de una secuencia de símbolos combinados para LR(1)"""
         first_set = set()
-        for s in sequence:
-            if s in self.terminals:
-                first_set.add(s)
+        
+        # Primero, asegúrate de tener los FIRST individuales actualizados
+        # Podemos reusar parte de tu lógica dinámica de primeros
+        first_dict = {nt: set() for nt in self.non_terminals}
+        changed = True
+        while changed:
+            changed = False
+            for head, productions in self.rules.items():
+                for prod in productions:
+                    if not prod:
+                        if 'ϵ' not in first_dict[head]:
+                            first_dict[head].add('ϵ')
+                            changed = True
+                    else:
+                        for symbol in prod:
+                            if symbol in self.terminals:
+                                if symbol not in first_dict[head]:
+                                    first_dict[head].add(symbol)
+                                    changed = True
+                                break
+                            else:
+                                antes = len(first_dict[head])
+                                first_dict[head].update(first_dict[symbol] - {'ϵ'})
+                                if len(first_dict[head]) > antes: changed = True
+                                if 'ϵ' not in first_dict[symbol]: break
+                        else:
+                            if 'ϵ' not in first_dict[head]:
+                                first_dict[head].add('ϵ')
+                                changed = True
+
+        # Ahora evaluamos la secuencia exacta del ítem LR(1)
+        for symbol in sequence:
+            if symbol in self.terminals:
+                first_set.add(symbol)
                 break
-            # Aproximación segura para terminales directos y lookaheads arrastrados
-            first_set.add(s) 
+            else:
+                # Añade el FIRST del no terminal (restando epsilon temporalmente)
+                first_set.update(first_dict[symbol] - {'ϵ'})
+                # Si el No Terminal no puede ser vacío (epsilon), la cadena de anticipación se corta acá
+                if 'ϵ' not in first_dict[symbol]:
+                    break
+        else:
+            # Si todos los elementos de la secuencia se anularon, epsilon es parte del FIRST
+            first_set.add('ϵ')
+            
         return first_set
 
     def goto(self, items, symbol):
@@ -305,9 +344,13 @@ class LRAnalyzer:
         }
 
     def parse_input(self, input_str):
-        """Simula la validación paso a paso usando un tokenizador inteligente por espacios y operadores"""
+        """
+        Simula la validación paso a paso de la familia LR.
+        Captura errores sintácticos de forma elegante devolviendo un árbol parcial,
+        las coordenadas de la celda de falla y los pasos detallados.
+        """
         # Tokenizador reparado: separa caracteres especiales sin romper palabras clave como 'id'
-        cleaned_str = input_str.replace('(', ' ( ').replace(')', ' ) ').replace('=', ' = ').replace('*', ' * ')
+        cleaned_str = input_str.replace('(', ' ( ').replace(')', ' ) ').replace('=', ' = ').replace('*', ' * ').replace('+', ' + ')
         tokens = cleaned_str.split() + ['$']
         
         table_data = self.get_frontend_table()
@@ -322,13 +365,21 @@ class LRAnalyzer:
         steps = []
         n = 1
         
+        # Flags y variables de control de error
+        has_error = False
+        error_cell = None
+        
         while True:
-            if n > 200: # Salvaguarda contra bucles infinitos por gramáticas ambiguas
-                raise Exception("Límite de pasos alcanzado. Posible bucle infinito en el análisis.")
+            if n > 200:
+                # Salvaguarda contra bucles infinitos en gramáticas mal diseñadas
+                has_error = True
+                error_cell = {"state": state_stack[-1], "symbol": curr_input[0], "msg": "Bucle infinito evitado."}
+                break
                 
             current_state = state_stack[-1]
             focus = curr_input[0]
             
+            # Reconstrucción visual de la pila de control para el frontend (Ej: $ 0 id 5)
             visual_stack = []
             for sym, st in zip(symbol_stack, state_stack):
                 if sym != '$': visual_stack.append(sym)
@@ -342,52 +393,103 @@ class LRAnalyzer:
                 "detail": ""
             }
             
+            # Obtener acción desde la tabla predictiva generada
             act = action_table.get(current_state, {}).get(focus)
-            if not act:
-                raise Exception(f"Error de sintaxis: El estado {current_state} no sabe qué hacer al leer '{focus}'.")
+            
+            # 🌟 DETECCIÓN DE ERROR SINTÁCTICO: Celda vacía o nula
+            if not act or act.strip() == "":
+                has_error = True
+                error_cell = {
+                    "state": current_state,
+                    "symbol": focus,
+                    "msg": f"Error de sintaxis: Celda vacía en Estado {current_state} con el token '{focus}'"
+                }
+                step_entry.update({
+                    "action": "Error",
+                    "detail": f"Error Sintáctico: Símbolo '{focus}' no esperado."
+                })
+                steps.append(step_entry)
+                break
                 
             real_act = act.split('/')[0] if '/' in act else act
             
+            # Operación SHIFT (Desplazamiento)
             if real_act.startswith('s'):
                 next_state = int(real_act[1:])
                 step_entry.update({"action": "Shift", "detail": f"al estado {next_state}"})
                 symbol_stack.append(focus)
                 state_stack.append(next_state)
+                # Creamos una hoja en la pila de árboles
                 tree_stack.append({"label": focus, "children": []})
                 curr_input.pop(0)
                 
+            # Operación REDUCE (Reducción)
             elif real_act.startswith('r'):
                 rule_idx = int(real_act[1:]) - 1
                 head, body = self.indexed_rules[rule_idx]
-                step_entry.update({"action": "Reduce", "detail": f"{head} → {' '.join(body)}"})
+                step_entry.update({"action": "Reduce", "detail": f"{head} → {' '.join(body) if body else 'ϵ'}"})
                 
                 pop_count = len(body)
                 children_nodes = []
+                
+                # Desapilamos tantos estados y símbolos como elementos tenga el cuerpo de la regla
                 for _ in range(pop_count):
-                    state_stack.pop()
-                    symbol_stack.pop()
-                    children_nodes.insert(0, tree_stack.pop())
-                    
+                    if state_stack: state_stack.pop()
+                    if symbol_stack: symbol_stack.pop()
+                    if tree_stack:
+                        children_nodes.insert(0, tree_stack.pop())
+                
                 top_state = state_stack[-1]
                 next_state_str = goto_table.get(top_state, {}).get(head)
                 
+                # Falla crítica en la configuración de la tabla GOTO
                 if not next_state_str:
-                    raise Exception(f"Falla crítica: No hay transición GOTO para el estado {top_state} y {head}")
+                    has_error = True
+                    error_cell = {"state": top_state, "symbol": head, "msg": "Falla en la transición GOTO."}
+                    step_entry.update({"action": "Error", "detail": f"Falla Crítica GOTO en Estado {top_state}"})
+                    steps.append(step_entry)
+                    break
                 
                 next_state = int(next_state_str)
                 symbol_stack.append(head)
                 state_stack.append(next_state)
+                # Consolidamos el subárbol colocando el No Terminal como padre
                 tree_stack.append({"label": head, "children": children_nodes})
                 
+            # Cadena Aceptada con Éxito
             elif real_act == 'acc':
-                step_entry.update({"action": "Accept", "detail": "✓"})
+                step_entry.update({"action": "Accept", "detail": "✓ Cadena aceptada"})
                 steps.append(step_entry)
                 break
             else:
-                raise Exception(f"Acción desconocida: {real_act}")
+                has_error = True
+                error_cell = {"state": current_state, "symbol": focus, "msg": "Acción desconocida."}
+                break
                 
             steps.append(step_entry)
             n += 1
             
-        root_tree = tree_stack[0] if tree_stack else {}
-        return steps, root_tree
+        # 🌟 CONSTRUCCIÓN DEL ÁRBOL EN CASO DE ERROR
+        # Si la cadena falló, recolectamos lo que se llegó a armar en la pila 
+        # y lo unimos bajo un nodo raíz ficticio con una cruz '✗' para que React dibuje el colapso.
+        if has_error:
+            error_children = list(tree_stack)
+            # Agregamos el token conflictivo que causó el colapso de la pila
+            if curr_input and curr_input[0] != '$':
+                error_children.append({"label": curr_input[0], "children": [{"label": "✗", "children": []}]})
+            else:
+                error_children.append({"label": "✗", "children": []})
+                
+            root_tree = {
+                "label": self.start_symbol if self.start_symbol else "S'",
+                "children": error_children
+            }
+        else:
+            root_tree = tree_stack[0] if tree_stack else {}
+            
+        return {
+            "success": not has_error,
+            "error_cell": error_cell,
+            "steps": steps,
+            "tree": root_tree
+        }

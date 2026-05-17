@@ -16,6 +16,14 @@ export default function Sidebar({
     .filter(l => l.includes('→') || l.includes('->'))
     .map(l => l.trim())
 
+  // ESCANEO DE SEGURIDAD INTERNO: Si algún paso registra un error, la cadena NO es válida
+  const hasErrorStep = result?.steps?.some(s => s.action === 'Error');
+  
+  // Condición ultra-robusta: prioridad total al historial de pasos reales
+  const isChainValid = result 
+    ? (hasErrorStep ? false : (result.success !== undefined ? result.success : result.valid)) 
+    : false;
+
   return (
     <aside className={styles.sidebar}>
       <section>
@@ -84,8 +92,8 @@ export default function Sidebar({
       </section>
 
       {result && (
-        <div className={`${styles.statusBadge} ${result.valid ? styles.valid : styles.invalid}`}>
-          {result.valid ? '✓ Cadena aceptada' : '✗ Cadena rechazada'}
+        <div className={`${styles.statusBadge} ${isChainValid ? styles.valid : styles.invalid}`}>
+          {isChainValid ? '✓ Cadena aceptada' : '✗ Cadena rechazada'}
         </div>
       )}
     </aside>
