@@ -1,5 +1,5 @@
 // Quitamos el slash final para tener un control perfecto de las rutas
-const BASE = 'http://127.0.0.1:8000'
+const BASE = 'https://parser-app-backend.onrender.com'
 
 /**
  * Analyze grammar + input string with a given algorithm.
