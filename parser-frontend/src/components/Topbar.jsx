@@ -4,8 +4,8 @@ export default function Topbar({ algorithms, active, onSelect, connected }) {
   return (
     <header className={styles.bar}>
       <div className={styles.logo}>
-        The<span className={styles.accent}>Parser</span>{' '}
-        <span className={styles.accent2}>App</span>
+        El <span className={styles.accent2}>Parserito</span>{' '}
+        <span className={styles.accent}>App</span>
       </div>
 
       <nav className={styles.tabs}>

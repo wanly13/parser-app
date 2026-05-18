@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import styles from './Panels.module.css'
-
+import Markdown from 'react-markdown'
 const SUGGESTIONS = [
   '¿Esta gramática es ambigua?',
   '¿Cómo elimino la recursión izquierda?',
@@ -12,10 +12,22 @@ const SUGGESTIONS = [
 
 export default function AIPanel({ result, aiAnswer, aiLoading, onAsk }) {
   const [question, setQuestion] = useState('')
+  // Nuevo estado para recordar la pregunta activa
+  const [lastAskedQuestion, setLastAskedQuestion] = useState('')
+
+  const handleAsk = (qText) => {
+    const q = qText.trim()
+    if (q) {
+      setLastAskedQuestion(q) // Guardamos la pregunta para mostrarla arriba
+      onAsk(q)
+    }
+  }
 
   const submit = () => {
-    const q = question.trim()
-    if (q) { onAsk(q); setQuestion('') }
+    if (question.trim()) {
+      handleAsk(question)
+      setQuestion('') // Ahora sí limpiamos el input de forma segura
+    }
   }
 
   return (
@@ -32,19 +44,26 @@ export default function AIPanel({ result, aiAnswer, aiLoading, onAsk }) {
           </p>
         )}
 
-        {result?.ai_hint && !aiAnswer && (
+        {result?.ai_hint && !lastAskedQuestion && !aiAnswer && (
           <p className={styles.aiBody}>{result.ai_hint}</p>
+        )}
+
+        {/* Bloque para mostrar la pregunta que se está procesando o ya se respondió */}
+        {lastAskedQuestion && (
+          <div className={styles.userQuestionBox}>
+             {lastAskedQuestion}
+          </div>
         )}
 
         {aiLoading && (
           <div className={styles.aiLoading}>
-            <span />  <span /> <span />
+            <span /> <span /> <span />
           </div>
         )}
 
-        {aiAnswer && (
+        {aiAnswer && !aiLoading && (
           <div className={styles.aiAnswer}>
-            {aiAnswer}
+            <Markdown>{aiAnswer}</Markdown>
           </div>
         )}
       </div>
@@ -56,7 +75,7 @@ export default function AIPanel({ result, aiAnswer, aiLoading, onAsk }) {
             <button
               key={s}
               className={styles.chip}
-              onClick={() => onAsk(s)}
+              onClick={() => handleAsk(s)} // También guarda la sugerencia como última pregunta
               disabled={aiLoading || !result}
             >
               {s}

@@ -109,7 +109,7 @@ export function useParser() {
       const data = await explainGrammar({ grammar, question, algorithm })
       setAiAnswer(data.explanation)
     } catch {
-      setAiAnswer('Backend de IA no disponible aún. Conéctalo en /api/explain.')
+      setAiAnswer('Backend de IA no disponible aún.')
     } finally {
       setAiLoading(false)
     }

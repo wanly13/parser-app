@@ -1,3 +1,6 @@
+import os
+from dotenv import load_dotenv
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -8,6 +11,12 @@ from ll1_analyzer import GrammarAnalyzer
 from lr_analyzer import LRAnalyzer
 from recursive_descent import RecursiveDescentParser
 
+# Para la IA
+
+from pydantic import BaseModel
+import httpx
+
+load_dotenv()
 app = FastAPI(title="Compiladores Progresivos API")
 
 app.add_middleware(
@@ -172,3 +181,84 @@ async def parse_grammar_dynamic(data: ParseRequest):
             "tree": None,
             "grammar_info": {"start": "", "non_terminals": [], "terminals": [], "productions": []}
         }
+
+
+class ExplainRequest(BaseModel):
+    grammar: str
+    question: str
+    algorithm: str
+
+# Configuración de OpenRouter (Idealmente usa variables de entorno)
+
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_URL = os.getenv("OPENROUTER_URL")
+
+@app.post("/api/ai/explain")
+async def explain_grammar(data: ExplainRequest):
+    system_prompt = (
+        "Eres un profesor experto en Teoría de la Computación y Compiladores. "
+        "Tu tarea es responder dudas de alumnos sobre gramáticas y algoritmos de análisis sintáctico (como LL(1), LR, etc.). "
+        "Sé claro, conciso y utiliza un lenguaje técnico pero fácil de entender."
+    )
+    
+    # Usamos textwrap o simplemente alineamos el bloque al ras izquierdo interno
+    user_prompt = (
+        f"Contexto del Analizador Sintáctico:\n"
+        f"- Algoritmo utilizado: {data.algorithm}\n"
+        f"- Gramática actual:\n{data.grammar}\n\n"
+        f"Pregunta del alumno: {data.question}"
+    )
+    
+    # Configuramos el cuerpo de la petición.
+    payload = {
+        "model": "google/gemini-2.5-flash", # Prueba con este que es ultra estable
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "max_tokens": 2000
+    }
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:3000", 
+        "X-Title": "Parser Compiladores UTEC"
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(OPENROUTER_URL, headers=headers, json=payload, timeout=30.0)
+            
+            # 1. Imprimir en tu consola de Python qué está llegando exactamente
+            print("--- RESPUESTA CRUDA DE OPENROUTER ---")
+            print(f"Status Code: {response.status_code}")
+            print(f"Content-Type recibido: {response.headers.get('content-type', 'Ninguno')}")
+            print(f"Texto del cuerpo: {response.text[:500]}") # Imprime los primeros 500 caracteres
+            print("-------------------------------------")
+
+            if response.status_code != 200:
+                return {"error": f"OpenRouter respondió con estado {response.status_code}", "valid": False}
+            
+            # 2. Validar de forma segura si la respuesta es realmente un JSON
+            content_type = response.headers.get("content-type", "")
+            if "application/json" not in content_type:
+                return {
+                    "error": f"OpenRouter no devolvió un JSON válido. Devolvió texto/html. Revisa la consola del backend.",
+                    "valid": False
+                }
+            
+            # Ahora sí es seguro intentar leer el JSON
+            result = response.json()
+            
+            # Validar que la estructura esperada exista en el JSON
+            if "choices" in result and len(result["choices"]) > 0:
+                ai_message = result["choices"][0]["message"]["content"]
+                return {"explanation": ai_message}
+            else:
+                return {"error": f"Estructura de JSON inesperada: {result}", "valid": False}
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"error": f"Error en la petición: {str(e)}", "valid": False}
